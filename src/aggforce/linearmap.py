@@ -74,6 +74,80 @@ def qp_linear_map(
         per_site_maps.append(np.matmul(con_mat, gen_map))
     return LinearMap(np.stack(per_site_maps))
 
+def qp_linear_map_per_cg_site(
+    forces,
+    config_mapping,
+    constraints=None,
+    l2_regularization=0.0,
+    xyz=None,
+    solver_args=dict(
+        solver="osqp",
+        eps_abs=1e-7,
+        max_iter=int(1e3),
+        polish=True,
+        polish_refine_iter=10,
+    ),
+):
+    r"""Searches for the linear force map which produces the average lowest mean
+    square norm of the mapped force.
+
+    Note: Uses a quadratic programming solver with equality constraints.
+
+    Arguments
+    ---------
+    forces (np.ndarray):
+        three dimensional array of shape (n_steps,n_sites,n_dims). Contains the
+        forces of the FG sites as a function of time.
+    config_mapping (np.ndarray):
+        LinearMap object which characterizes configurational map.
+    constraints (set of frozensets):
+        Each entry is a frozenset of indices, the group of which is constrained.
+        Currently, only bond constraints (frozensets of size 2) are supported.
+    l2_regularization (float):
+        if positive, a l2 normalization of the (full) mapping vector is applied
+        with this coefficient.
+    xyz (None):
+        Ignored. Included for compatibility with the interface of other methods.
+    solver_args (dict):
+        Passed as options to qp_solve to solve quadratic program.
+
+    Returns
+    -------
+    LinearMap object characterizing force mapping.
+    """
+    
+    reshaped_fs = qp_form(forces)
+    con_mat = make_bond_constraint_matrix(config_mapping.n_fg_sites, constraints)
+    per_site_maps = []
+    
+    for ind in range(config_mapping.n_cg_sites):
+        mapping_indices = np.nonzero(config_mapping.standard_matrix[ind, :])[0]
+        # prep matrices for solver
+        temp_forces = reshaped_fs[:, mapping_indices]
+        temp_constraints = con_mat[mapping_indices, :][:, mapping_indices]
+        # reg_mat = np.matmul(reshaped_fs, con_mat)
+        reg_mat = np.matmul(temp_forces, temp_constraints)
+        qp_mat = np.matmul(reg_mat.T, reg_mat)
+        zero_q = np.zeros(qp_mat.shape[0])
+        # since we want to penalize the norm of the expanded vector, we add
+        # con_mat.t*con_mat
+        if l2_regularization > 0.0:
+            qp_mat += l2_regularization * np.matmul(con_mat.T, con_mat)
+        # run solver
+        # We have to find a way to restrain the influence of other atoms in the projection of forces, not to receive from all atoms
+        # But just fro the ones belonging to the bead
+        # sbasis = np.zeros(config_mapping.n_cg_sites)
+        # sbasis[ind] = 1
+        sbasis = np.ones(1, dtype=int)
+        constraint_mat = np.matmul(config_mapping.standard_matrix[ind, mapping_indices], temp_constraints)
+        gen_map = solve_qp(
+            P=qp_mat, q=zero_q, A=constraint_mat, b=sbasis, **solver_args
+        )
+        bead_mapping = np.zeros(config_mapping.n_fg_sites)
+        bead_mapping[mapping_indices] = np.matmul(temp_constraints, gen_map)
+        per_site_maps.append(bead_mapping)
+    return LinearMap(np.stack(per_site_maps))
+
 
 def qp_form(target):
     r"""Transforms a 3 array (target) to a particular form of 2-array.

@@ -97,6 +97,35 @@ def project_forces(
     to_return.update({"constraints": constrained_inds})
     return to_return
 
+def project_forces_each_bead(
+    xyz,
+    forces,
+    config_mapping,
+    constrained_inds="auto",
+    method=linearmap.qp_linear_map_per_cg_site,
+    only_return_forces=False,
+    **kwargs
+):
+    if constrained_inds == "auto":
+        constrained_inds = constfinder.guess_pairwise_constraints(xyz)
+    force_map = method(
+        xyz=xyz,
+        config_mapping=config_mapping,
+        forces=forces,
+        constraints=constrained_inds,
+        **kwargs
+    )
+    mapped_forces = force_map(points=forces, copoints=xyz)
+    if only_return_forces:
+        return mapped_forces
+    to_return = {}
+    to_return.update({"projected_forces": mapped_forces})
+    to_return.update({"map": force_map})
+    to_return.update({"residual": force_smoothness(mapped_forces)})
+    to_return.update({"constraints": constrained_inds})
+    return to_return
+    
+
 
 def project_forces_grid_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kwargs):
     """Cross validation over project_forces using a grid of parameters.
